@@ -271,10 +271,15 @@ gst_vaapi_texture_glx_new_wrapped (GstVaapiDisplay * display,
   GST_VAAPI_DISPLAY_LOCK (display);
   success = gl_bind_texture (&ts, target, texture_id);
   if (success) {
-    if (!gl_get_texture_param (target, GL_TEXTURE_WIDTH, &width) ||
-        !gl_get_texture_param (target, GL_TEXTURE_HEIGHT, &height) ||
-        !gl_get_texture_param (target, GL_TEXTURE_BORDER, &border_width))
-      success = FALSE;
+    do {
+      if (!gl_get_texture_param (target, GL_TEXTURE_WIDTH, &width))
+        break;
+      if (!gl_get_texture_param (target, GL_TEXTURE_HEIGHT, &height))
+        break;
+      if (!gl_get_texture_param (target, GL_TEXTURE_BORDER, &border_width))
+        border_width = 0;       /* OpenGL 3 */
+      success = TRUE;
+    } while (0);
     gl_unbind_texture (&ts);
   }
   GST_VAAPI_DISPLAY_UNLOCK (display);

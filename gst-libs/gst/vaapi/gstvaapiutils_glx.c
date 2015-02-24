@@ -35,7 +35,7 @@
 
 /** Lookup for substring NAME in string EXT using SEP as separators */
 static gboolean
-find_string (const gchar *name, const gchar *ext, const gchar *sep)
+find_string (const gchar * name, const gchar * ext, const gchar * sep)
 {
   const gchar *end;
   int name_len, n;
@@ -290,6 +290,7 @@ gl_resize (guint width, guint height)
 GLContextState *
 gl_create_context (Display * dpy, int screen, GLContextState * parent)
 {
+  GLVTable *const gl_vtable = gl_get_vtable ();
   GLContextState *cs;
   GLXFBConfig *fbconfigs = NULL;
   int fbconfig_id, val, n, n_fbconfigs;
@@ -302,6 +303,11 @@ gl_create_context (Display * dpy, int screen, GLContextState * parent)
     GLX_RED_SIZE, 8,
     GLX_GREEN_SIZE, 8,
     GLX_BLUE_SIZE, 8,
+    None
+  };
+
+  static GLint context_attrs[] = {
+    GLX_RENDER_TYPE, GLX_RGBA_TYPE,
     None
   };
 
@@ -355,6 +361,14 @@ gl_create_context (Display * dpy, int screen, GLContextState * parent)
   }
 
   cs->visual = glXGetVisualFromFBConfig (cs->display, fbconfigs[n]);
+
+  if (gl_vtable->has_ARB_create_context) {
+    cs->context = gl_vtable->glx_create_context_attribs (cs->display,
+        fbconfigs[n], parent ? parent->context : NULL, True, context_attrs);
+    if (cs->context)
+      goto end;
+  }
+
   cs->context = glXCreateNewContext (cs->display,
       fbconfigs[n], GLX_RGBA_TYPE, parent ? parent->context : NULL, True);
   if (cs->context)
@@ -588,7 +602,7 @@ typedef void (*GLFuncPtr) (void);
 typedef GLFuncPtr (*GLXGetProcAddressProc) (const gchar *);
 
 static GLFuncPtr
-get_proc_address_default (const gchar *name)
+get_proc_address_default (const gchar * name)
 {
   return NULL;
 }
@@ -611,7 +625,7 @@ get_proc_address_func (void)
 }
 
 static inline GLFuncPtr
-get_proc_address (const gchar *name)
+get_proc_address (const gchar * name)
 {
   static GLXGetProcAddressProc get_proc_func = NULL;
   if (!get_proc_func)
@@ -629,30 +643,35 @@ get_proc_address (const gchar *name)
  */
 static GLVTable gl_vtable_static;
 
-static GLVTable *
-gl_init_vtable (void)
+static gboolean
+gl_init_vtable_with_extensions (GLVTable * gl_vtable,
+    const gchar * gl_extensions)
 {
-  GLVTable *const gl_vtable = &gl_vtable_static;
-  const gchar *gl_extensions = (const gchar *) glGetString (GL_EXTENSIONS);
   gboolean has_extension;
+
+  /* GLX_ARB_create_context */
+  gl_vtable->glx_create_context_attribs = (PFNGLXCREATECONTEXTATTRIBSARBPROC)
+      get_proc_address ("glXCreateContextAttribsARB");
+  if (gl_vtable->glx_create_context_attribs)
+    gl_vtable->has_ARB_create_context = TRUE;
 
   /* GLX_EXT_texture_from_pixmap */
   gl_vtable->glx_create_pixmap = (PFNGLXCREATEPIXMAPPROC)
       get_proc_address ("glXCreatePixmap");
   if (!gl_vtable->glx_create_pixmap)
-    return NULL;
+    return FALSE;
   gl_vtable->glx_destroy_pixmap = (PFNGLXDESTROYPIXMAPPROC)
       get_proc_address ("glXDestroyPixmap");
   if (!gl_vtable->glx_destroy_pixmap)
-    return NULL;
+    return FALSE;
   gl_vtable->glx_bind_tex_image = (PFNGLXBINDTEXIMAGEEXTPROC)
       get_proc_address ("glXBindTexImageEXT");
   if (!gl_vtable->glx_bind_tex_image)
-    return NULL;
+    return FALSE;
   gl_vtable->glx_release_tex_image = (PFNGLXRELEASETEXIMAGEEXTPROC)
       get_proc_address ("glXReleaseTexImageEXT");
   if (!gl_vtable->glx_release_tex_image)
-    return NULL;
+    return FALSE;
 
   /* GL_ARB_framebuffer_object */
   has_extension = (find_string ("GL_ARB_framebuffer_object", gl_extensions, " ")
@@ -662,48 +681,91 @@ gl_init_vtable (void)
     gl_vtable->gl_gen_framebuffers = (PFNGLGENFRAMEBUFFERSEXTPROC)
         get_proc_address ("glGenFramebuffersEXT");
     if (!gl_vtable->gl_gen_framebuffers)
-      return NULL;
+      return FALSE;
     gl_vtable->gl_delete_framebuffers = (PFNGLDELETEFRAMEBUFFERSEXTPROC)
         get_proc_address ("glDeleteFramebuffersEXT");
     if (!gl_vtable->gl_delete_framebuffers)
-      return NULL;
+      return FALSE;
     gl_vtable->gl_bind_framebuffer = (PFNGLBINDFRAMEBUFFEREXTPROC)
         get_proc_address ("glBindFramebufferEXT");
     if (!gl_vtable->gl_bind_framebuffer)
-      return NULL;
+      return FALSE;
     gl_vtable->gl_gen_renderbuffers = (PFNGLGENRENDERBUFFERSEXTPROC)
         get_proc_address ("glGenRenderbuffersEXT");
     if (!gl_vtable->gl_gen_renderbuffers)
-      return NULL;
+      return FALSE;
     gl_vtable->gl_delete_renderbuffers = (PFNGLDELETERENDERBUFFERSEXTPROC)
         get_proc_address ("glDeleteRenderbuffersEXT");
     if (!gl_vtable->gl_delete_renderbuffers)
-      return NULL;
+      return FALSE;
     gl_vtable->gl_bind_renderbuffer = (PFNGLBINDRENDERBUFFEREXTPROC)
         get_proc_address ("glBindRenderbufferEXT");
     if (!gl_vtable->gl_bind_renderbuffer)
-      return NULL;
+      return FALSE;
     gl_vtable->gl_renderbuffer_storage = (PFNGLRENDERBUFFERSTORAGEEXTPROC)
         get_proc_address ("glRenderbufferStorageEXT");
     if (!gl_vtable->gl_renderbuffer_storage)
-      return NULL;
+      return FALSE;
     gl_vtable->gl_framebuffer_renderbuffer =
         (PFNGLFRAMEBUFFERRENDERBUFFEREXTPROC)
         get_proc_address ("glFramebufferRenderbufferEXT");
     if (!gl_vtable->gl_framebuffer_renderbuffer)
-      return NULL;
+      return FALSE;
     gl_vtable->gl_framebuffer_texture_2d = (PFNGLFRAMEBUFFERTEXTURE2DEXTPROC)
         get_proc_address ("glFramebufferTexture2DEXT");
     if (!gl_vtable->gl_framebuffer_texture_2d)
-      return NULL;
+      return FALSE;
     gl_vtable->gl_check_framebuffer_status =
         (PFNGLCHECKFRAMEBUFFERSTATUSEXTPROC)
         get_proc_address ("glCheckFramebufferStatusEXT");
     if (!gl_vtable->gl_check_framebuffer_status)
-      return NULL;
+      return FALSE;
     gl_vtable->has_framebuffer_object = TRUE;
   }
-  return gl_vtable;
+  return TRUE;
+}
+
+static GLVTable *
+gl_init_vtable (void)
+{
+  GLVTable *const gl_vtable = &gl_vtable_static;
+  PFNGLGETSTRINGIPROC gl_get_stringi;
+  gchar *gl_extensions = NULL;
+  GString *gl_extensions_string = NULL;
+  guint i, num_extensions;
+  gboolean success;
+
+  do {
+    gl_get_stringi = (PFNGLGETSTRINGIPROC) get_proc_address ("glGetStringi");
+    if (!gl_get_stringi)
+      break;
+    if (!gl_get_param (GL_NUM_EXTENSIONS, &num_extensions) || !num_extensions)
+      break;
+
+    gl_extensions_string = g_string_new (NULL);
+    if (!gl_extensions_string)
+      return NULL;
+
+    for (i = 0; i < num_extensions; i++) {
+      if (i > 0)
+        g_string_append_c (gl_extensions_string, ' ');
+      g_string_append (gl_extensions_string,
+          (gchar *) gl_get_stringi (GL_EXTENSIONS, i));
+    }
+    gl_extensions = gl_extensions_string->str;
+  } while (0);
+
+  if (!gl_extensions) {
+    gl_extensions = (gchar *) glGetString (GL_EXTENSIONS);
+    if (!gl_extensions)
+      return NULL;
+  }
+
+  success = gl_init_vtable_with_extensions (gl_vtable, gl_extensions);
+
+  if (gl_extensions_string)
+    g_string_free (gl_extensions_string, TRUE);
+  return success ? gl_vtable : NULL;
 }
 
 /**

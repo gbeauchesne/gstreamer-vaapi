@@ -133,6 +133,7 @@ gl_create_texture (GLenum target, GLenum format, guint width, guint height);
 typedef struct _GLVTable GLVTable;
 struct _GLVTable
 {
+  PFNGLXCREATECONTEXTATTRIBSARBPROC glx_create_context_attribs;
   PFNGLXCREATEPIXMAPPROC glx_create_pixmap;
   PFNGLXDESTROYPIXMAPPROC glx_destroy_pixmap;
   PFNGLXBINDTEXIMAGEEXTPROC glx_bind_tex_image;
@@ -147,6 +148,7 @@ struct _GLVTable
   PFNGLFRAMEBUFFERRENDERBUFFEREXTPROC gl_framebuffer_renderbuffer;
   PFNGLFRAMEBUFFERTEXTURE2DEXTPROC gl_framebuffer_texture_2d;
   PFNGLCHECKFRAMEBUFFERSTATUSEXTPROC gl_check_framebuffer_status;
+  guint has_ARB_create_context:1;
   guint has_texture_from_pixmap:1;
   guint has_framebuffer_object:1;
 };
