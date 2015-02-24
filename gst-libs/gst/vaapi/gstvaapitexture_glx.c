@@ -81,18 +81,18 @@ gst_vaapi_texture_glx_put_surface (GstVaapiTexture * texture,
 static void
 destroy_objects (GstVaapiTextureGLX * texture)
 {
-  GLContextState old_cs;
+  GLContextState old_cs, *const cs = texture->gl_context;
 
   if (texture->gl_context)
     gl_set_current_context (texture->gl_context, &old_cs);
 
   if (texture->fbo) {
-    gl_destroy_framebuffer_object (texture->fbo);
+    gl_destroy_framebuffer_object (cs, texture->fbo);
     texture->fbo = NULL;
   }
 
   if (texture->pixo) {
-    gl_destroy_pixmap_object (texture->pixo);
+    gl_destroy_pixmap_object (cs, texture->pixo);
     texture->pixo = NULL;
   }
 
@@ -130,24 +130,27 @@ create_objects (GstVaapiTextureGLX * texture, guint texture_id)
 {
   GstVaapiTexture *const base_texture = GST_VAAPI_TEXTURE (texture);
   Display *const dpy = GST_VAAPI_OBJECT_NATIVE_DISPLAY (texture);
-  GLContextState old_cs;
+  GLContextState old_cs, *cs;
   gboolean success = FALSE;
 
   gl_get_current_context (&old_cs);
 
-  texture->gl_context = gl_create_context (dpy, DefaultScreen (dpy), &old_cs);
-  if (!texture->gl_context ||
-      !gl_set_current_context (texture->gl_context, NULL))
+  cs = gl_create_context (dpy, DefaultScreen (dpy), &old_cs);
+  if (!cs)
+    return FALSE;
+  texture->gl_context = cs;
+
+  if (!gl_set_current_context (texture->gl_context, NULL))
     return FALSE;
 
-  texture->pixo = gl_create_pixmap_object (dpy,
+  texture->pixo = gl_create_pixmap_object (cs,
       base_texture->width, base_texture->height);
   if (!texture->pixo) {
     GST_ERROR ("failed to create GLX pixmap");
     goto out_reset_context;
   }
 
-  texture->fbo = gl_create_framebuffer_object (base_texture->gl_target,
+  texture->fbo = gl_create_framebuffer_object (cs, base_texture->gl_target,
       texture_id, base_texture->width, base_texture->height);
   if (!texture->fbo) {
     GST_ERROR ("failed to create FBO");
@@ -163,12 +166,15 @@ out_reset_context:
 static gboolean
 create_texture_unlocked (GstVaapiTexture * texture)
 {
+  GLContextState cs;
   guint texture_id;
 
   if (texture->is_wrapped)
     texture_id = GST_VAAPI_TEXTURE_ID (texture);
   else {
-    texture_id = gl_create_texture (texture->gl_target, texture->gl_format,
+    gl_init_context_wrapped (&cs, NULL, None, NULL);
+
+    texture_id = gl_create_texture (&cs, texture->gl_target, texture->gl_format,
         texture->width, texture->height);
     if (!texture_id)
       return FALSE;
@@ -258,7 +264,8 @@ GstVaapiTexture *
 gst_vaapi_texture_glx_new_wrapped (GstVaapiDisplay * display,
     guint texture_id, guint target, guint format)
 {
-  guint width, height, border_width;
+  guint width, height, border_width = 0;
+  GLContextState cs;
   GLTextureState ts;
   gboolean success;
 
@@ -269,18 +276,20 @@ gst_vaapi_texture_glx_new_wrapped (GstVaapiDisplay * display,
 
   /* Check texture dimensions */
   GST_VAAPI_DISPLAY_LOCK (display);
-  success = gl_bind_texture (&ts, target, texture_id);
+  gl_init_context_wrapped (&cs, NULL, None, NULL);
+  success = gl_bind_texture (&cs, &ts, target, texture_id);
   if (success) {
     do {
       if (!gl_get_texture_param (target, GL_TEXTURE_WIDTH, &width))
         break;
       if (!gl_get_texture_param (target, GL_TEXTURE_HEIGHT, &height))
         break;
-      if (!gl_get_texture_param (target, GL_TEXTURE_BORDER, &border_width))
-        border_width = 0;       /* OpenGL 3 */
+      if (cs.api_version < 3 &&
+          !gl_get_texture_param (target, GL_TEXTURE_BORDER, &border_width))
+        break;
       success = TRUE;
     } while (0);
-    gl_unbind_texture (&ts);
+    gl_unbind_texture (&cs, &ts);
   }
   GST_VAAPI_DISPLAY_UNLOCK (display);
   if (!success)
@@ -314,7 +323,7 @@ gst_vaapi_texture_glx_put_surface_unlocked (GstVaapiTexture * base_texture,
 {
   GstVaapiTextureGLX *const texture = GST_VAAPI_TEXTURE_GLX (base_texture);
   VAStatus status;
-  GLContextState old_cs;
+  GLContextState old_cs, *const cs = texture->gl_context;
   gboolean success = FALSE;
 
   const GLfloat *txc, *tyc;
@@ -322,6 +331,8 @@ gst_vaapi_texture_glx_put_surface_unlocked (GstVaapiTexture * base_texture,
     {0.0f, 1.0f},
     {1.0f, 0.0f},
   };
+
+  g_return_val_if_fail (cs != NULL, FALSE);
 
   status = vaPutSurface (GST_VAAPI_OBJECT_VADISPLAY (texture),
       GST_VAAPI_OBJECT_ID (surface), texture->pixo->pixmap,
@@ -331,11 +342,10 @@ gst_vaapi_texture_glx_put_surface_unlocked (GstVaapiTexture * base_texture,
   if (!vaapi_check_status (status, "vaPutSurface() [TFP]"))
     return FALSE;
 
-  if (texture->gl_context &&
-      !gl_set_current_context (texture->gl_context, &old_cs))
+  if (!gl_set_current_context (cs, &old_cs))
     return FALSE;
 
-  if (!gl_bind_framebuffer_object (texture->fbo)) {
+  if (!gl_bind_framebuffer_object (cs, texture->fbo)) {
     GST_ERROR ("failed to bind FBO");
     goto out_reset_context;
   }
@@ -345,7 +355,7 @@ gst_vaapi_texture_glx_put_surface_unlocked (GstVaapiTexture * base_texture,
     goto out_unbind_fbo;
   }
 
-  if (!gl_bind_pixmap_object (texture->pixo)) {
+  if (!gl_bind_pixmap_object (cs, texture->pixo)) {
     GST_ERROR ("could not bind GLX pixmap");
     goto out_unbind_fbo;
   }
@@ -368,14 +378,14 @@ gst_vaapi_texture_glx_put_surface_unlocked (GstVaapiTexture * base_texture,
   }
   glEnd ();
 
-  if (!gl_unbind_pixmap_object (texture->pixo)) {
+  if (!gl_unbind_pixmap_object (cs, texture->pixo)) {
     GST_ERROR ("failed to release GLX pixmap");
     goto out_unbind_fbo;
   }
   success = TRUE;
 
 out_unbind_fbo:
-  if (!gl_unbind_framebuffer_object (texture->fbo))
+  if (!gl_unbind_framebuffer_object (cs, texture->fbo))
     success = FALSE;
 out_reset_context:
   if (texture->gl_context && !gl_set_current_context (&old_cs, NULL))

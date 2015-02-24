@@ -51,6 +51,14 @@ typedef void (*PFNGLXDESTROYPIXMAPPROC) (Display *, GLXPixmap);
 #define GL_FRAMEBUFFER_BINDING GL_FRAMEBUFFER_BINDING_EXT
 #endif
 
+#ifndef GLX_CONTEXT_PROFILE_MASK_ARB
+#define GLX_CONTEXT_PROFILE_MASK_ARB 0x9126
+#endif
+
+#ifndef GLX_CONTEXT_CORE_PROFILE_BIT_ARB
+#define GLX_CONTEXT_CORE_PROFILE_BIT_ARB 0x00000001
+#endif
+
 G_GNUC_INTERNAL
 const gchar *
 gl_get_error_string (GLenum error);
@@ -86,8 +94,14 @@ struct _GLContextState
   Window window;
   XVisualInfo *visual;
   GLXContext context;
+  guint api_version;
   guint swapped_buffers:1;
 };
+
+G_GNUC_INTERNAL
+gboolean
+gl_init_context_wrapped (GLContextState * cs, Display * dpy, Window window,
+    GLXContext context);
 
 G_GNUC_INTERNAL
 GLContextState *
@@ -120,15 +134,17 @@ struct _GLTextureState
 
 G_GNUC_INTERNAL
 gboolean
-gl_bind_texture (GLTextureState * ts, GLenum target, GLuint texture);
+gl_bind_texture (GLContextState * cs, GLTextureState * ts, GLenum target,
+    GLuint texture);
 
 G_GNUC_INTERNAL
 void
-gl_unbind_texture (GLTextureState * ts);
+gl_unbind_texture (GLContextState * cs, GLTextureState * ts);
 
 G_GNUC_INTERNAL
 GLuint
-gl_create_texture (GLenum target, GLenum format, guint width, guint height);
+gl_create_texture (GLContextState * cs, GLenum target, GLenum format,
+   guint width, guint height);
 
 typedef struct _GLVTable GLVTable;
 struct _GLVTable
@@ -173,19 +189,19 @@ struct _GLPixmapObject
 
 G_GNUC_INTERNAL
 GLPixmapObject *
-gl_create_pixmap_object (Display * dpy, guint width, guint height);
+gl_create_pixmap_object (GLContextState * cs, guint width, guint height);
 
 G_GNUC_INTERNAL
 void
-gl_destroy_pixmap_object (GLPixmapObject * pixo);
+gl_destroy_pixmap_object (GLContextState * cs, GLPixmapObject * pixo);
 
 G_GNUC_INTERNAL
 gboolean
-gl_bind_pixmap_object (GLPixmapObject * pixo);
+gl_bind_pixmap_object (GLContextState * cs, GLPixmapObject * pixo);
 
 G_GNUC_INTERNAL
 gboolean
-gl_unbind_pixmap_object (GLPixmapObject * pixo);
+gl_unbind_pixmap_object (GLContextState * cs, GLPixmapObject * pixo);
 
 typedef struct _GLFramebufferObject GLFramebufferObject;
 struct _GLFramebufferObject
@@ -199,19 +215,19 @@ struct _GLFramebufferObject
 
 G_GNUC_INTERNAL
 GLFramebufferObject *
-gl_create_framebuffer_object (GLenum target,
+gl_create_framebuffer_object (GLContextState * cs, GLenum target,
     GLuint texture, guint width, guint height);
 
 G_GNUC_INTERNAL
 void
-gl_destroy_framebuffer_object (GLFramebufferObject * fbo);
+gl_destroy_framebuffer_object (GLContextState * cs, GLFramebufferObject * fbo);
 
 G_GNUC_INTERNAL
 gboolean
-gl_bind_framebuffer_object (GLFramebufferObject * fbo);
+gl_bind_framebuffer_object (GLContextState * cs, GLFramebufferObject * fbo);
 
 G_GNUC_INTERNAL
 gboolean
-gl_unbind_framebuffer_object (GLFramebufferObject * fbo);
+gl_unbind_framebuffer_object (GLContextState * cs, GLFramebufferObject * fbo);
 
 #endif /* GST_VAAPI_UTILS_GLX_H */

@@ -498,6 +498,7 @@ gst_vaapi_window_glx_put_texture (GstVaapiWindowGLX * window,
     GstVaapiTexture * texture,
     const GstVaapiRectangle * src_rect, const GstVaapiRectangle * dst_rect)
 {
+  GLContextState *cs;
   GstVaapiRectangle tmp_src_rect, tmp_dst_rect;
   GLTextureState ts;
   GLenum tex_target;
@@ -507,6 +508,9 @@ gst_vaapi_window_glx_put_texture (GstVaapiWindowGLX * window,
 
   g_return_val_if_fail (window != NULL, FALSE);
   g_return_val_if_fail (texture != NULL, FALSE);
+
+  cs = window->priv.gl_context;
+  g_return_val_if_fail (cs != NULL, FALSE);
 
   gst_vaapi_texture_get_size (texture, &tex_width, &tex_height);
   fill_rect (&tmp_src_rect, src_rect, tex_width, tex_height);
@@ -523,7 +527,7 @@ gst_vaapi_window_glx_put_texture (GstVaapiWindowGLX * window,
     return FALSE;
 
   tex_id = gst_vaapi_texture_get_id (texture);
-  if (!gl_bind_texture (&ts, tex_target, tex_id))
+  if (!gl_bind_texture (cs, &ts, tex_target, tex_id))
     return FALSE;
   glColor4f (1.0f, 1.0f, 1.0f, 1.0f);
   glPushMatrix ();
@@ -547,6 +551,6 @@ gst_vaapi_window_glx_put_texture (GstVaapiWindowGLX * window,
   }
   glEnd ();
   glPopMatrix ();
-  gl_unbind_texture (&ts);
+  gl_unbind_texture (cs, &ts);
   return TRUE;
 }

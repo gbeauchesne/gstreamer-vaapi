@@ -276,6 +276,30 @@ gl_resize (guint width, guint height)
   glTranslatef (0.0f, -1.0f * height, 0.0f);
 }
 
+gboolean
+gl_init_context_wrapped (GLContextState * cs, Display * dpy, Window window,
+    GLXContext context)
+{
+  guint flags;
+
+  if (dpy && context) {
+    cs->display = dpy;
+    cs->window = window;
+    cs->context = context;
+  } else {
+    gl_get_current_context (cs);
+    cs->window = glXGetCurrentDrawable ();
+  }
+
+  cs->visual = NULL;
+  cs->swapped_buffers = FALSE;
+
+  if (!gl_get_param (GLX_CONTEXT_PROFILE_MASK_ARB, &flags))
+    flags = 0;
+  cs->api_version = 2 + ! !(flags & GLX_CONTEXT_CORE_PROFILE_BIT_ARB);
+  return TRUE;
+}
+
 /**
  * gl_create_context:
  * @dpy: an X11 #Display
@@ -365,14 +389,18 @@ gl_create_context (Display * dpy, int screen, GLContextState * parent)
   if (gl_vtable->has_ARB_create_context) {
     cs->context = gl_vtable->glx_create_context_attribs (cs->display,
         fbconfigs[n], parent ? parent->context : NULL, True, context_attrs);
-    if (cs->context)
+    if (cs->context) {
+      cs->api_version = 2;
       goto end;
+    }
   }
 
   cs->context = glXCreateNewContext (cs->display,
       fbconfigs[n], GLX_RGBA_TYPE, parent ? parent->context : NULL, True);
-  if (cs->context)
+  if (cs->context) {
+    cs->api_version = 2;
     goto end;
+  }
 
 error:
   gl_destroy_context (cs);
@@ -481,6 +509,7 @@ gl_swap_buffers (GLContextState * cs)
 
 /**
  * gl_bind_texture:
+ * @cs: a #GLContextState
  * @ts: a #GLTextureState
  * @target: the target to which the texture is bound
  * @texture: the name of a texture
@@ -491,44 +520,41 @@ gl_swap_buffers (GLContextState * cs)
  * Return value: %TRUE on success
  */
 gboolean
-gl_bind_texture (GLTextureState * ts, GLenum target, GLuint texture)
+gl_bind_texture (GLContextState * cs, GLTextureState * ts, GLenum target,
+    GLuint texture)
 {
   GLenum binding;
 
+  binding = gl_get_texture_binding (target);
+  if (!binding)
+    return FALSE;
+
   ts->target = target;
 
-  if (glIsEnabled (target)) {
-    binding = gl_get_texture_binding (target);
-    if (!binding)
-      return FALSE;
-    if (!gl_get_param (binding, &ts->old_texture))
-      return FALSE;
-    ts->was_enabled = TRUE;
-    ts->was_bound = texture == ts->old_texture;
-    if (ts->was_bound)
-      return TRUE;
-  } else {
+  ts->was_enabled = cs->api_version > 2 || glIsEnabled (target);
+  if (!ts->was_enabled)
     glEnable (target);
-    ts->old_texture = 0;
-    ts->was_enabled = FALSE;
-    ts->was_bound = FALSE;
-  }
 
-  gl_purge_errors ();
-  glBindTexture (target, texture);
-  if (gl_check_error ())
-    return FALSE;
+  ts->was_bound = gl_get_param (binding, &ts->old_texture) &&
+      texture == ts->old_texture;
+  if (!ts->was_bound) {
+    gl_purge_errors ();
+    glBindTexture (target, texture);
+    if (gl_check_error ())
+      return FALSE;
+  }
   return TRUE;
 }
 
 /**
  * gl_unbind_texture:
+ * @cs: a #GLContextState
  * @ts: a #GLTextureState
  *
  * Rebinds the texture that was previously bound and recorded in @ts.
  */
 void
-gl_unbind_texture (GLTextureState * ts)
+gl_unbind_texture (GLContextState * cs, GLTextureState * ts)
 {
   if (!ts->was_bound && ts->old_texture)
     glBindTexture (ts->target, ts->old_texture);
@@ -538,6 +564,7 @@ gl_unbind_texture (GLTextureState * ts)
 
 /**
  * gl_create_texture:
+ * @cs: a #GLContextState
  * @target: the target to which the texture is bound
  * @format: the format of the pixel data
  * @width: the requested width, in pixels
@@ -549,7 +576,8 @@ gl_unbind_texture (GLTextureState * ts)
  * Return value: the newly created texture name
  */
 GLuint
-gl_create_texture (GLenum target, GLenum format, guint width, guint height)
+gl_create_texture (GLContextState * cs, GLenum target, GLenum format,
+    guint width, guint height)
 {
   GLenum internal_format;
   GLuint texture;
@@ -576,7 +604,7 @@ gl_create_texture (GLenum target, GLenum format, guint width, guint height)
   g_assert (bytes_per_component > 0);
 
   glGenTextures (1, &texture);
-  if (!gl_bind_texture (&ts, target, texture))
+  if (!gl_bind_texture (cs, &ts, target, texture))
     return 0;
   glTexParameteri (target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri (target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -585,7 +613,7 @@ gl_create_texture (GLenum target, GLenum format, guint width, guint height)
   glPixelStorei (GL_UNPACK_ALIGNMENT, bytes_per_component);
   glTexImage2D (target,
       0, internal_format, width, height, 0, format, GL_UNSIGNED_BYTE, NULL);
-  gl_unbind_texture (&ts);
+  gl_unbind_texture (cs, &ts);
   return texture;
 }
 
@@ -790,7 +818,7 @@ gl_get_vtable (void)
 
 /**
  * gl_create_pixmap_object:
- * @dpy: an X11 #Display
+ * @cs: a #GLContextState
  * @width: the request width, in pixels
  * @height: the request height, in pixels
  *
@@ -800,11 +828,12 @@ gl_get_vtable (void)
  * Return value: the newly created #GLPixmapObject object
  */
 GLPixmapObject *
-gl_create_pixmap_object (Display * dpy, guint width, guint height)
+gl_create_pixmap_object (GLContextState * cs, guint width, guint height)
 {
   GLVTable *const gl_vtable = gl_get_vtable ();
   GLPixmapObject *pixo;
   GLXFBConfig *fbconfig;
+  Display *dpy;
   int screen;
   Window rootwin;
   XWindowAttributes wattr;
@@ -832,6 +861,7 @@ gl_create_pixmap_object (Display * dpy, guint width, guint height)
   if (!gl_vtable)
     return NULL;
 
+  dpy = cs->display;
   screen = DefaultScreen (dpy);
   rootwin = RootWindow (dpy, screen);
 
@@ -898,33 +928,34 @@ gl_create_pixmap_object (Display * dpy, guint width, guint height)
 
   pixo->target = GL_TEXTURE_2D;
   glGenTextures (1, &pixo->texture);
-  if (!gl_bind_texture (&pixo->old_texture, pixo->target, pixo->texture))
+  if (!gl_bind_texture (cs, &pixo->old_texture, pixo->target, pixo->texture))
     goto error;
   glTexParameteri (pixo->target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri (pixo->target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  gl_unbind_texture (&pixo->old_texture);
+  gl_unbind_texture (cs, &pixo->old_texture);
   return pixo;
 
 error:
-  gl_destroy_pixmap_object (pixo);
+  gl_destroy_pixmap_object (cs, pixo);
   return NULL;
 }
 
 /**
  * gl_destroy_pixmap_object:
+ * @cs: a #GLContextState
  * @pixo: a #GLPixmapObject
  *
  * Destroys the #GLPixmapObject object.
  */
 void
-gl_destroy_pixmap_object (GLPixmapObject * pixo)
+gl_destroy_pixmap_object (GLContextState * cs, GLPixmapObject * pixo)
 {
   GLVTable *const gl_vtable = gl_get_vtable ();
 
   if (!pixo)
     return;
 
-  gl_unbind_pixmap_object (pixo);
+  gl_unbind_pixmap_object (cs, pixo);
 
   if (pixo->texture) {
     glDeleteTextures (1, &pixo->texture);
@@ -945,6 +976,7 @@ gl_destroy_pixmap_object (GLPixmapObject * pixo)
 
 /**
  * gl_bind_pixmap_object:
+ * @cs: a #GLContextState
  * @pixo: a #GLPixmapObject
  *
  * Defines a two-dimensional texture image. The texture image is taken
@@ -954,14 +986,14 @@ gl_destroy_pixmap_object (GLPixmapObject * pixo)
  * Return value: %TRUE on success
  */
 gboolean
-gl_bind_pixmap_object (GLPixmapObject * pixo)
+gl_bind_pixmap_object (GLContextState * cs, GLPixmapObject * pixo)
 {
   GLVTable *const gl_vtable = gl_get_vtable ();
 
   if (pixo->is_bound)
     return TRUE;
 
-  if (!gl_bind_texture (&pixo->old_texture, pixo->target, pixo->texture))
+  if (!gl_bind_texture (cs, &pixo->old_texture, pixo->target, pixo->texture))
     return FALSE;
 
   x11_trap_errors ();
@@ -979,6 +1011,7 @@ gl_bind_pixmap_object (GLPixmapObject * pixo)
 
 /**
  * gl_unbind_pixmap_object:
+ * @cs: a #GLContextState
  * @pixo: a #GLPixmapObject
  *
  * Releases a color buffers that is being used as a texture.
@@ -986,7 +1019,7 @@ gl_bind_pixmap_object (GLPixmapObject * pixo)
  * Return value: %TRUE on success
  */
 gboolean
-gl_unbind_pixmap_object (GLPixmapObject * pixo)
+gl_unbind_pixmap_object (GLContextState * cs, GLPixmapObject * pixo)
 {
   GLVTable *const gl_vtable = gl_get_vtable ();
 
@@ -1002,7 +1035,7 @@ gl_unbind_pixmap_object (GLPixmapObject * pixo)
     return FALSE;
   }
 
-  gl_unbind_texture (&pixo->old_texture);
+  gl_unbind_texture (cs, &pixo->old_texture);
 
   pixo->is_bound = FALSE;
   return TRUE;
@@ -1010,6 +1043,7 @@ gl_unbind_pixmap_object (GLPixmapObject * pixo)
 
 /**
  * gl_create_framebuffer_object:
+ * @cs: a #GLContextState
  * @target: the target to which the texture is bound
  * @texture: the GL texture to hold the framebuffer
  * @width: the requested width, in pixels
@@ -1021,7 +1055,7 @@ gl_unbind_pixmap_object (GLPixmapObject * pixo)
  *   an error occurred
  */
 GLFramebufferObject *
-gl_create_framebuffer_object (GLenum target,
+gl_create_framebuffer_object (GLContextState * cs, GLenum target,
     GLuint texture, guint width, guint height)
 {
   GLVTable *const gl_vtable = gl_get_vtable ();
@@ -1058,7 +1092,7 @@ gl_create_framebuffer_object (GLenum target,
   return fbo;
 
 error:
-  gl_destroy_framebuffer_object (fbo);
+  gl_destroy_framebuffer_object (cs, fbo);
   return NULL;
 }
 
@@ -1069,14 +1103,14 @@ error:
  * Destroys the @fbo object.
  */
 void
-gl_destroy_framebuffer_object (GLFramebufferObject * fbo)
+gl_destroy_framebuffer_object (GLContextState * cs, GLFramebufferObject * fbo)
 {
   GLVTable *const gl_vtable = gl_get_vtable ();
 
   if (!fbo)
     return;
 
-  gl_unbind_framebuffer_object (fbo);
+  gl_unbind_framebuffer_object (cs, fbo);
 
   if (fbo->fbo) {
     gl_vtable->gl_delete_framebuffers (1, &fbo->fbo);
@@ -1087,6 +1121,7 @@ gl_destroy_framebuffer_object (GLFramebufferObject * fbo)
 
 /**
  * gl_bind_framebuffer_object:
+ * @cs: a #GLContextState
  * @fbo: a #GLFramebufferObject
  *
  * Binds @fbo object.
@@ -1094,7 +1129,7 @@ gl_destroy_framebuffer_object (GLFramebufferObject * fbo)
  * Return value: %TRUE on success
  */
 gboolean
-gl_bind_framebuffer_object (GLFramebufferObject * fbo)
+gl_bind_framebuffer_object (GLContextState * cs, GLFramebufferObject * fbo)
 {
   GLVTable *const gl_vtable = gl_get_vtable ();
   const guint width = fbo->width;
@@ -1125,6 +1160,7 @@ gl_bind_framebuffer_object (GLFramebufferObject * fbo)
 
 /**
  * gl_unbind_framebuffer_object:
+ * @cs: a #GLContextState
  * @fbo: a #GLFramebufferObject
  *
  * Releases @fbo object.
@@ -1132,7 +1168,7 @@ gl_bind_framebuffer_object (GLFramebufferObject * fbo)
  * Return value: %TRUE on success
  */
 gboolean
-gl_unbind_framebuffer_object (GLFramebufferObject * fbo)
+gl_unbind_framebuffer_object (GLContextState * cs, GLFramebufferObject * fbo)
 {
   GLVTable *const gl_vtable = gl_get_vtable ();
 
