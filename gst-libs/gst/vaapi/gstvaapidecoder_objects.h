@@ -57,6 +57,12 @@ typedef enum
   GST_VAAPI_PICTURE_TYPE_BI,            // BI type (VC-1)
 } GstVaapiPictureType;
 
+typedef enum
+{
+  GST_VAAPI_CREATE_PICTURE_FLAG_CLONE = 1 << 0,
+  GST_VAAPI_CREATE_PICTURE_FLAG_FIELD = 1 << 1,
+} GstVaapiCreatePictureFlags;
+
 /**
  * GstVaapiPictureFlags:
  * @GST_VAAPI_PICTURE_FLAG_SKIPPED: skipped frame
