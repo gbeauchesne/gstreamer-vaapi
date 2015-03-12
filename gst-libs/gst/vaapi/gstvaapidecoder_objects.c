@@ -54,11 +54,11 @@ gst_video_codec_frame_clear (GstVideoCodecFrame ** frame_ptr)
 
 GST_VAAPI_CODEC_DEFINE_TYPE (GstVaapiPicture, gst_vaapi_picture);
 
-enum
+typedef enum
 {
   GST_VAAPI_CREATE_PICTURE_FLAG_CLONE = 1 << 0,
   GST_VAAPI_CREATE_PICTURE_FLAG_FIELD = 1 << 1,
-};
+} GstVaapiCreatePictureFlags;
 
 void
 gst_vaapi_picture_destroy (GstVaapiPicture * picture)
