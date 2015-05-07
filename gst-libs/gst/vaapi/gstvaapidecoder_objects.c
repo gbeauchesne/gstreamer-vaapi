@@ -114,6 +114,7 @@ gst_vaapi_picture_create (GstVaapiPicture * picture,
             GST_VAAPI_PICTURE_FLAG_REFERENCE |
             GST_VAAPI_PICTURE_FLAG_INTERLACED |
             GST_VAAPI_PICTURE_FLAG_FF | GST_VAAPI_PICTURE_FLAG_TFF |
+            GST_VAAPI_PICTURE_FLAG_ONEFIELD |
             GST_VAAPI_PICTURE_FLAG_RFF | GST_VAAPI_PICTURE_FLAG_MVC));
 
     picture->structure = parent_picture->structure;
